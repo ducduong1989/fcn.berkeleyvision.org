@@ -97,7 +97,7 @@ class VOCSegDataLayer(caffe.Layer):
         - subtract mean
         - transpose to channel x height x width order
         """
-        im = Image.open('{}/JPEGImages/{}.jpg'.format(self.voc_dir, idx))
+        im = Image.open('{}/PNGImages/{}.png'.format(self.voc_dir, idx)).convert('RGB')
         in_ = np.array(im, dtype=np.float32)
         in_ = in_[:,:,::-1]
         in_ -= self.mean
