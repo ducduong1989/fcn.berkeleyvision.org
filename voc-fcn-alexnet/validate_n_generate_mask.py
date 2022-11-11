@@ -216,8 +216,8 @@ def validate_with_log(deploy_prototxt_file, train_model, input_images_dir, input
                 mapping = {
                     0: 'background',
                     1: 'lung',
-                    4: 'ipf',
-                    9: 'non-ipf'
+                    2: 'ipf',
+                    3: 'non-ipf'
                 }
                 ious = []
                 for idx, iou in enumerate(IoUs):
