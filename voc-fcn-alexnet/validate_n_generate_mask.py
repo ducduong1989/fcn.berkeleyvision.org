@@ -8,11 +8,50 @@ from PIL import Image
 import argparse
 import time
 import shutil
+import cv2 
+# from mmseg.core.evaluation import eval_metrics
 
 # The format to save image.
 _IMAGE_FORMAT = '%06d_image'
 # The format to save prediction
 _PREDICTION_FORMAT = '%06d_prediction'
+
+def intersect_and_union(pred_label, label, num_classes, ignore_index):
+    mask = (label != ignore_index)
+    pred_label = pred_label[mask]
+    label = label[mask]
+
+    intersect = pred_label[pred_label == label]
+    area_intersect, _ = np.histogram(
+        intersect, bins=np.arange(num_classes + 1))
+    area_pred_label, _ = np.histogram(
+        pred_label, bins=np.arange(num_classes + 1))
+    area_label, _ = np.histogram(label, bins=np.arange(num_classes + 1))
+    area_union = area_pred_label + area_label - area_intersect
+
+    return area_intersect, area_union, area_pred_label, area_label
+
+
+def mean_iou(results, gt_seg_maps, num_classes, ignore_index):
+    num_imgs = len(results)
+    assert len(gt_seg_maps) == num_imgs
+    total_area_intersect = np.zeros((num_classes, ), dtype=np.float)
+    total_area_union = np.zeros((num_classes, ), dtype=np.float)
+    total_area_pred_label = np.zeros((num_classes, ), dtype=np.float)
+    total_area_label = np.zeros((num_classes, ), dtype=np.float)
+    for i in range(num_imgs):
+        area_intersect, area_union, area_pred_label, area_label = \
+            intersect_and_union(results[i], gt_seg_maps[i], num_classes,
+                                ignore_index=ignore_index)
+        total_area_intersect += area_intersect
+        total_area_union += area_union
+        total_area_pred_label += area_pred_label
+        total_area_label += area_label
+    all_acc = total_area_intersect.sum() / total_area_label.sum()
+    acc = total_area_intersect / total_area_label
+    iou = total_area_intersect / total_area_union
+
+    return all_acc, acc, iou
 
 def fast_hist(a, b, n):
     k = (a >= 0) & (a < n)
@@ -37,8 +76,14 @@ def compute_hist(net, save_dir, dataset, layer='score', gt='label'):
         loss += net.blobs['loss'].data.flat[0]
     return hist, loss / len(dataset)
 
+def compute_IoU(pred_list, mask_list, num_class=4):
+    assert len(pred_list) == len(mask_list), "Len pred and mask not equa."
+    _, _, IoUs =mean_iou(pred_list, mask_list, num_classes=num_class, ignore_index=255)
+    return IoUs 
+    
+
 def seg_tests(test_net, save_format, dataset, logfile, layer='score', gt='label'):
-    print '>>>', datetime.now(), 'Begin seg tests'    
+    print ('>>>', datetime.now(), 'Begin seg tests')
     do_seg_tests(test_net, 0, save_format, dataset, logfile, layer, gt)
 
 def do_seg_tests(net, iter, save_format, dataset, logfile, layer='score', gt='label'):    
@@ -48,23 +93,23 @@ def do_seg_tests(net, iter, save_format, dataset, logfile, layer='score', gt='la
         save_format = save_format.format(iter)
     hist, loss = compute_hist(net, save_format, dataset, layer, gt)
     # mean loss
-    print '>>>', datetime.now(), 'Iteration', iter, 'loss', loss
+    print ('>>>', datetime.now(), 'Iteration', iter, 'loss', loss)
     log_data.append(datetime.now().strftime('%m/%d/%Y/%H-%M-%S') + ', Iteration: ' + str(iter) + 'loss: ' + str(loss) + '\n')
     # overall accuracy
     acc = np.diag(hist).sum() / hist.sum()
-    print '>>>', datetime.now(), 'Iteration', iter, 'overall accuracy', acc
+    print ('>>>', datetime.now(), 'Iteration', iter, 'overall accuracy', acc)
     log_data.append(datetime.now().strftime('%m/%d/%Y/%H-%M-%S') + ', Iteration: ' + str(iter) + 'accuracy: ' + str(acc) + '\n')
     # per-class accuracy
     acc = np.diag(hist) / hist.sum(1)
-    print '>>>', datetime.now(), 'Iteration', iter, 'mean accuracy', np.nanmean(acc)
+    print ('>>>', datetime.now(), 'Iteration', iter, 'mean accuracy', np.nanmean(acc))
     log_data.append(datetime.now().strftime('%m/%d/%Y/%H-%M-%S') + ', Iteration: ' + str(iter) + 'mean accuracy: ' + str(acc) + '\n')
     # per-class IU
     iu = np.diag(hist) / (hist.sum(1) + hist.sum(0) - np.diag(hist))
-    print '>>>', datetime.now(), 'Iteration', iter, 'mean IU', np.nanmean(iu)
+    print ('>>>', datetime.now(), 'Iteration', iter, 'mean IU', np.nanmean(iu))
     log_data.append(datetime.now().strftime('%m/%d/%Y/%H-%M-%S') + ', Iteration: ' + str(iter) + 'mean IU: ' + str(np.nanmean(iu)) + '\n')
     freq = hist.sum(1) / hist.sum()
-    print '>>>', datetime.now(), 'Iteration', iter, 'fwavacc', \
-            (freq[freq > 0] * iu[freq > 0]).sum()
+    print ('>>>', datetime.now(), 'Iteration', iter, 'fwavacc', \
+            (freq[freq > 0] * iu[freq > 0]).sum())
     
     with open(logfile, 'w') as handler:
         handler.writelines(log_data)
@@ -117,6 +162,56 @@ def inference(deploy_prototxt_file, train_model, class_input_images_dir, class_o
       handler.write("origin,generated\n")
       for ind in range(len(ls_pred_name)):
         handler.write(ls_image_name[ind] + "," + ls_pred_name[ind] + "\n")
+        
+def validate_with_log(deploy_prototxt_file, train_model, input_images_dir, input_split, input_gt_dir, output_dir, is_test=False):    
+    assert os.path.exists(input_images_dir), input_images_dir + " does not exist. Please check it."
+    # load net
+    net = caffe.Net(deploy_prototxt_file, train_model, caffe.TEST)    
+
+    image_paths = os.listdir(input_images_dir)      
+    ls_image_name = list()
+    ls_pred_name = list()  
+    filenames = None
+    pred_list = []
+    gt_list = []
+    
+    with open(input_split, "r") as f:
+        filenames = f.readlines()
+        for fn in filenames:
+            fn = fn.replace("\n", "")
+            image_path_full = os.path.join(input_images_dir, fn + ".png") 
+            im = Image.open(image_path_full).convert('RGB')
+            in_ = np.array(im, dtype=np.float32)
+            in_ = in_[:,:,::-1]
+            in_ -= np.array((104.00699,116.66877,122.67892))
+            in_ = in_.transpose((2,0,1))
+            # shape for input (data blob is N x C x H x W), set data
+            net.blobs['data'].reshape(1, *in_.shape)
+            net.blobs['data'].data[...] = in_
+            # run net and take argmax for prediction
+            net.forward()
+            out = net.blobs['score'].data[0].argmax(axis=0)
+            segmap = out.astype(np.uint8) 
+            
+            # load ground truth image
+            gt_full_path = os.path.join(input_gt_dir, fn + ".png")
+            gt = cv2.imread(gt_full_path, cv2.IMREAD_GRAYSCALE)
+            
+            pred_list.append(segmap)
+            gt_list.append(gt)
+    
+        ## calculate IoU scores per class and save to txt file
+        model_classes = ["background", "lung", "ipf", "non-ipf"]
+        IoUs = compute_IoU(pred_list, gt_list) * 100
+        filename = "validation_IoUs.txt" if not is_test else "test_IoUs.txt"
+        with open(os.path.join(output_dir, filename), "w") as f:
+            if is_test:
+                f.write("Test IoUs: \n")
+            else:
+                f.write("Validation IoUs: \n")
+            for i, cls_name in enumerate(model_classes):
+                f.write("IoU." + cls_name + ": " + str(IoUs[i]) + "\n")
+            f.write("mIoU: "  +str(np.mean(IoUs)) + "\n")
 
 
 def main():
@@ -131,8 +226,11 @@ def main():
                                             
     args = parser.parse_args()
     from_scratch = args.from_scratch
-    train_file = '/input_medical_data/tosei/ImageSets/Segmentation/trainval.txt'
-    val_file = '/input_medical_data/KCRC/ImageSets/Segmentation/trainval.txt'
+    train_file = '/input_medical_data/tosei/ImageSets/Segmentation/train.txt'
+    val_file = '/input_medical_data/tosei/ImageSets/Segmentation/val.txt'
+    test_file = '/input_medical_data/KCRC/ImageSets/Segmentation/trainval.txt'
+    val_gt_dir = '/input_medical_data/tosei/SegmentationClass'
+    test_dir_gt = '/input_medical_data/KCRC/SegmentationClass'
     if from_scratch:
         train_prototxt_file = 'train.prototxt'
         val_prototxt_file = 'val.prototxt'
@@ -172,6 +270,10 @@ def main():
     tosei_class_output_dir = '/output_medical_data/tosei/segmentation_results'
     kcrc_class_input_images_dir = '/input_medical_data/KCRC/PNGImages'
     kcrc_class_output_dir = '/output_medical_data/KCRC/segmentation_results'
+    
+    validate_with_log(deploy_prototxt_file, train_model, tosei_class_input_images_dir, train_file.replace("train.txt", "val.txt"), val_gt_dir, '/output_medical_data', is_test=False)
+    validate_with_log(deploy_prototxt_file, train_model, kcrc_class_input_images_dir, test_file, test_dir_gt, '/output_medical_data', is_test=True)
+    
     inference(deploy_prototxt_file, train_model=train_model, class_input_images_dir=tosei_class_input_images_dir,
                 class_output_dir=tosei_class_output_dir)
     inference(deploy_prototxt_file, train_model=train_model, class_input_images_dir=kcrc_class_input_images_dir,
