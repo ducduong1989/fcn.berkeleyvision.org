@@ -78,7 +78,7 @@ def compute_hist(net, save_dir, dataset, layer='score', gt='label'):
 
 def compute_IoU(pred_list, mask_list, num_class=4):
     assert len(pred_list) == len(mask_list), "Len pred and mask not equa."
-    _, _, IoUs =mean_iou(pred_list, mask_list, num_classes=num_class, ignore_index=255)
+    _, _, IoUs = mean_iou(pred_list, mask_list, num_classes=num_class, ignore_index=255)
     return IoUs 
     
 
@@ -163,7 +163,7 @@ def inference(deploy_prototxt_file, train_model, class_input_images_dir, class_o
       for ind in range(len(ls_pred_name)):
         handler.write(ls_image_name[ind] + "," + ls_pred_name[ind] + "\n")
         
-def validate_with_log(deploy_prototxt_file, train_model, input_images_dir, input_split, input_gt_dir, output_dir, is_test=False):    
+def validate_with_log(deploy_prototxt_file, train_model, input_images_dir, input_split, input_gt_dir, output_dir, is_test=False, num_class=4):    
     assert os.path.exists(input_images_dir), input_images_dir + " does not exist. Please check it."
     # load net
     net = caffe.Net(deploy_prototxt_file, train_model, caffe.TEST)    
@@ -202,16 +202,34 @@ def validate_with_log(deploy_prototxt_file, train_model, input_images_dir, input
     
         ## calculate IoU scores per class and save to txt file
         model_classes = ["background", "lung", "ipf", "non-ipf"]
-        IoUs = compute_IoU(pred_list, gt_list) * 100
+        IoUs = compute_IoU(pred_list, gt_list, num_class=num_class) * 100
         filename = "validation_IoUs.txt" if not is_test else "test_IoUs.txt"
         with open(os.path.join(output_dir, filename), "w") as f:
             if is_test:
                 f.write("Test IoUs: \n")
             else:
                 f.write("Validation IoUs: \n")
-            for i, cls_name in enumerate(model_classes):
-                f.write("IoU." + cls_name + ": " + str(IoUs[i]) + "\n")
-            f.write("mIoU: "  +str(np.mean(IoUs)) + "\n")
+            if num_class == 4:
+                for i, cls_name in enumerate(model_classes):
+                    f.write("IoU." + cls_name + ": " + str(IoUs[i]) + "\n")
+            else:
+                mapping = {
+                    0: 'background',
+                    1: 'lung',
+                    4: 'ipf',
+                    9: 'non-ipf'
+                }
+                ious = []
+                for idx, iou in enumerate(IoUs):
+                    if mapping.get(idx, None) is None:
+                        f.write("IoU." + str(idx) + ": " + str(iou) + "\n")
+                    else:
+                        f.write("IoU." + mapping[idx] + ": " + str(iou) + "\n")
+                        ious.append(iou)
+            if num_class == 4:
+                f.write("mIoU: "  +str(np.mean(np.array(IoUs))) + "\n")
+            else:
+                f.write("mIoU: "  +str(np.mean(np.array(ious))) + "\n")
 
 
 def main():
@@ -254,7 +272,7 @@ def main():
         for line in handler:
             val_dataset.append(line.strip())            
     val_logfile = os.path.join('/output_medical_data', 'val_log_' + str(time.time()).replace(".", "") + '.txt')
-    val_net = caffe.Net(val_prototxt_file, train_model, caffe.TEST)    
+    val_net = caffe.Net(val_prototxt_file, train_model, caffe.TEST)
     seg_tests(test_net=val_net, save_format=None, dataset=val_dataset, logfile=val_logfile)
 
     #validate on train set
@@ -271,8 +289,12 @@ def main():
     kcrc_class_input_images_dir = '/input_medical_data/KCRC/PNGImages'
     kcrc_class_output_dir = '/output_medical_data/KCRC/segmentation_results'
     
-    validate_with_log(deploy_prototxt_file, train_model, tosei_class_input_images_dir, train_file.replace("train.txt", "val.txt"), val_gt_dir, '/output_medical_data', is_test=False)
-    validate_with_log(deploy_prototxt_file, train_model, kcrc_class_input_images_dir, test_file, test_dir_gt, '/output_medical_data', is_test=True)
+    if args.from_scratch:
+        validate_with_log(deploy_prototxt_file, train_model, tosei_class_input_images_dir, train_file.replace("train.txt", "val.txt"), val_gt_dir, '/output_medical_data', is_test=False)
+        validate_with_log(deploy_prototxt_file, train_model, kcrc_class_input_images_dir, test_file, test_dir_gt, '/output_medical_data', is_test=True)
+    else:
+        validate_with_log(deploy_prototxt_file, train_model, tosei_class_input_images_dir, train_file.replace("train.txt", "val.txt"), val_gt_dir, '/output_medical_data', is_test=False, num_class=21)
+        validate_with_log(deploy_prototxt_file, train_model, kcrc_class_input_images_dir, test_file, test_dir_gt, '/output_medical_data', is_test=True, num_class=21)
     
     inference(deploy_prototxt_file, train_model=train_model, class_input_images_dir=tosei_class_input_images_dir,
                 class_output_dir=tosei_class_output_dir)

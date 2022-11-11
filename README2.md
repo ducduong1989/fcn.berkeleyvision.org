@@ -29,18 +29,24 @@
 
 9. Train FCN Alexnet caffe and generate mask with 4 classes from scratch <br />
     9.1. Train:  <br />
-    - caffe train --solver=solver.prototxt --gpu=0  <br />
+    - **caffe train --solver=solver.prototxt --gpu=0**  <br /> 
+
     9.2. Eval and generate mask:  <br />
-    - python validate_n_generate_mask.py --weight=/output_segmentor/train_iter_40000.caffemodel --from_scratch <br />
+    - python **validate_n_generate_mask.py --weight=/output_segmentor/train_iter_40000.caffemodel --from_scratch** <br>
+    - IoU per each class in val/test will be saved at {fcn_alexnet_output}/validation_iou.txt & {fcn_alexnet_output}/test_iou.txt <br>
+  
     9.3. Generate colored mask for visualization  <br />
-    - python generate_color_mask.py --weight=/output_segmentor/train_iter_40000.caffemodel --from_scratch <br />
+    - python **generate_color_mask.py --weight=/output_segmentor/train_iter_40000.caffemodel --from_scratch** <br />
 
 10. Train FCN Alexnet caffe and generate mask with 21 classes from Pascal-VOC with [0,1,2,3] as our data <br />
-    9.1. Train:  <br />
-    - caffe train --solver=solver_origin.prototxt --weights=/pretrained_model/fcn-alexnet-pascal.caffemodel --gpu=1  <br />
+9.1. Train:  <br />
+    - **caffe train --solver=solver_origin.prototxt --weights=/pretrained_model/fcn-alexnet-pascal.caffemodel --gpu=1** <br>
+  
     9.2. Eval and generate mask:  <br />
-    - python validate_n_generate_mask.py --weight=/output_segmentor/train_iter_40000.caffemodel <br />
+    - **python validate_n_generate_mask.py --weight=/output_segmentor/train_iter_40000.caffemodel** <br>
+    - IoU per each class in val/test will be saved at {fcn_alexnet_output}/validation_iou.txt & {fcn_alexnet_output}/test_iou.txt <br>
+   
     9.3. Generate colored mask for visualization  <br />
-    - python generate_color_mask.py --weight=/output_segmentor/train_iter_40000.caffemodel <br />
+    - **python generate_color_mask.py --weight=/output_segmentor/train_iter_40000.caffemodel** <br>
 
 
